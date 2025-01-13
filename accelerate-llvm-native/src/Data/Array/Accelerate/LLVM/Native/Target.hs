@@ -35,6 +35,7 @@ import Data.Maybe                                                   ( fromMaybe,
 import Data.Ord                                                     ( Down(..), comparing )
 import System.Directory
 import qualified System.Info                                        as Info
+import System.IO                                                    ( hPutStrLn, stderr )
 import System.IO.Unsafe
 import System.Process
 
@@ -116,6 +117,7 @@ hostLLVMVersion =
 clangMachineVersionOutput :: String
 clangMachineVersionOutput =
   unsafePerformIO $ do
+    hPutStrLn stderr $ "[accelerate-llvm-native] clangExePath = < " ++ clangExePath ++ " >"
     (_ec, _out, err) <- readProcessWithExitCode clangExePath ["-E", "-", "-march=native", "-###"] ""
     return err
 

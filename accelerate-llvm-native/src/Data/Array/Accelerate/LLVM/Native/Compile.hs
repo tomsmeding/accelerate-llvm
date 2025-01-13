@@ -139,7 +139,8 @@ compile pacc aenv = do
               -- don't warn about it
               -- TODO: change llvm-pretty so that it doesn't require us to give
               -- it a target triple
-              ,"-Wno-override-module"]
+              ,"-Wno-override-module"
+              ,"-v"]
               ++ outputFlags
 
         let linkOutputFlags | Info.os == "mingw32" = []
