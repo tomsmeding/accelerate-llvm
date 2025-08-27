@@ -21,6 +21,7 @@
 module Data.Array.Accelerate.LLVM.Native.Execute.Marshal ( module M )
   where
 
+import Data.Array.Accelerate.LLVM.State (unliftIOLLVM)
 import Data.Array.Accelerate.LLVM.Execute.Marshal               as M
 import Data.Array.Accelerate.Array.Unique
 
@@ -38,5 +39,7 @@ instance Marshal Native where
                     32 -> [| FFI.argInt32 . fromIntegral |]
                     64 -> [| FFI.argInt64 . fromIntegral |]
                     _  -> error "I don't know what architecture I am" )
-  marshalScalarData' _ = return . DL.singleton . FFI.argPtr . unsafeUniqueArrayPtr
+  marshalScalarData' _ ua k =
+    unliftIOLLVM $ \unlift ->
+      withUniqueArrayPtr ua (unlift . k . DL.singleton . FFI.argPtr)
 

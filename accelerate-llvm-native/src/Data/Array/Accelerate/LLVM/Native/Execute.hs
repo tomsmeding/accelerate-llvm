@@ -53,6 +53,7 @@ import qualified Data.Array.Accelerate.LLVM.Native.Debug            as Debug
 
 import Control.Concurrent                                           ( myThreadId )
 import Control.Concurrent.Extra                                     ( getThreadId )
+import Control.Concurrent.MVar
 import Control.Monad.State                                          ( gets )
 import Control.Monad.Trans                                          ( liftIO )
 import Data.ByteString.Short                                        ( ShortByteString )
@@ -919,12 +920,28 @@ mkTasksUsing
       -> params
       -> Par Native (Seq Action)
 mkTasksUsing ranges (name, f) gamma aenv shr paramsR params = do
-  arg <- marshalParams' @Native (paramsR `TupRpair` TupRsingle (ParamRenv gamma)) (params, aenv)
+  -- We do this dance in order for the marshal callback (which keeps arrays
+  -- alive!) to not return until the kernel is actually done executing.
+  argvar <- liftIO newEmptyMVar
+  liftIO $ putStrLn "mkTasksUsing: entry"
+  donevar <- liftIO newEmptyMVar
+  withArg <- marshalParamsStaged @Native (paramsR `TupRpair` TupRsingle (ParamRenv gamma)) (params, aenv)
+    -- liftIO $ putStrLn "mkTasksUsing: marshalled arg"
+    -- putMVar argvar arg
+    -- _ <- takeMVar donevar
+    -- liftIO $ putStrLn "mkTasksUsing: received done"
+    -- return ()
+
   return $ flip fmap ranges $ \(_,u,v) -> do
     sched (string % " " % parenthesised string % " -> " % parenthesised string) (S8.unpack name) (showShape shr u) (showShape shr v)
     let argU = marshalShape' @Native shr u
     let argV = marshalShape' @Native shr v
-    callFFI f retVoid $ DL.toList $ argU `DL.append` argV `DL.append` arg
+    liftIO $ putStrLn "mkTasksUsing: taking arg..."
+    arg <- takeMVar argvar
+    liftIO $ putStrLn "mkTasksUsing: got arg"
+    liftIO $ callFFI f retVoid $ DL.toList $ argU `DL.append` argV `DL.append` arg
+    putMVar donevar ()
+    liftIO $ putStrLn "mkTasksUsing: signalled done"
 
 {-# INLINABLE mkTasksUsingIndex #-}
 mkTasksUsingIndex
@@ -937,13 +954,29 @@ mkTasksUsingIndex
       -> params
       -> Par Native (Seq Action)
 mkTasksUsingIndex ranges (name, f) gamma aenv shr paramsR params = do
-  arg <- marshalParams' @Native (paramsR `TupRpair` TupRsingle (ParamRenv gamma)) (params, aenv)
+  -- We do this dance in order for the marshal callback (which keeps arrays
+  -- alive!) to not return until the kernel is actually done executing.
+  liftIO $ putStrLn "mkTasksUsingIndex: entry"
+  argvar <- liftIO newEmptyMVar
+  donevar <- liftIO newEmptyMVar
+  marshalParamsDL @Native (paramsR `TupRpair` TupRsingle (ParamRenv gamma)) (params, aenv) $ \arg -> liftIO $ do
+    liftIO $ putStrLn "mkTasksUsingIndex: marshalled arg"
+    putMVar argvar arg
+    _ <- takeMVar donevar
+    liftIO $ putStrLn "mkTasksUsingIndex: received done"
+    return ()
+
   return $ flip fmap ranges $ \(i,u,v) -> do
     sched (string % " " % parenthesised string % " -> " % parenthesised string) (S8.unpack name) (showShape shr u) (showShape shr v)
     let argU = marshalShape' @Native shr u
     let argV = marshalShape' @Native shr v
     let argI = DL.singleton $ marshalInt @Native i
+    liftIO $ putStrLn "mkTasksUsingIndex: taking arg..."
+    arg <- takeMVar argvar
+    liftIO $ putStrLn "mkTasksUsingIndex: got arg"
     callFFI f retVoid $ DL.toList $ argU `DL.append` argV `DL.append` argI `DL.append` arg
+    putMVar donevar ()
+    liftIO $ putStrLn "mkTasksUsingIndex: signalled done"
 
 
 -- Standard C functions

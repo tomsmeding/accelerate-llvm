@@ -60,7 +60,6 @@ import Formatting
 import Prelude                                                      hiding ( exp, map, sum, scanl, scanr )
 import qualified Data.ByteString.Short                              as S
 import qualified Data.ByteString.Short.Extra                        as SE
-import qualified Data.DList                                         as DL
 
 
 {-# SPECIALISE INLINE executeAcc     :: ExecAcc     PTX      a ->             Par PTX (FutureArraysR PTX a) #-}
@@ -693,6 +692,7 @@ stencilCore
     -> Par PTX (Future (Array sh e))
 stencilCore repr@(ArrayR shr _) exe gamma aenv halo shOut paramsR params =
   withExecutable exe $ \ptxExecutable -> do
+    asks ptxStream >>= \stream -> liftPar (Event.waypoint stream) >>= \event -> liftIO (Event.block event)
     let
         inside  = ptxExecutable !# "stencil_inside"
         border  = ptxExecutable !# "stencil_border"
@@ -731,8 +731,8 @@ stencilCore repr@(ArrayR shr _) exe gamma aenv halo shOut paramsR params =
         child <- asks ptxStream
         event <- liftPar (Event.waypoint child)
         ready <- liftIO  (Event.query event)
-        if ready then return ()
-                 else liftIO (Event.after event parent)
+        if ready then Debug.traceM Debug.dump_exec "stencil border ready" >> return ()
+                 else Debug.traceM Debug.dump_exec "stencil border after'ing" >> liftIO (Event.after event parent)
 
     put future result
     return future
@@ -836,8 +836,8 @@ executeOp kernel gamma aenv shr sh paramsR params =
   let n = size shr sh
   in  when (n > 0) $ do
         stream <- asks ptxStream
-        argv   <- marshalParams' @PTX (paramsR `TupRpair` TupRsingle (ParamRenv gamma)) (params, aenv)
-        liftIO  $ launch kernel stream n $ DL.toList argv
+        marshalParams @PTX (paramsR `TupRpair` TupRsingle (ParamRenv gamma)) (params, aenv) $ \argv ->
+          liftIO $ launch kernel stream n argv
 
 
 -- Execute a device function with the given thread configuration and function

@@ -63,6 +63,9 @@ import qualified Formatting                                         as F
 import Prelude
 
 import GHC.Base                                                     ( IO(..), Int(..), Double(..), touch#, int2Double# )
+import GHC.Stack
+import Data.List (intercalate)
+import Control.Concurrent
 
 
 -- | Allocate a device-side array associated with the given host array. If the
@@ -120,12 +123,15 @@ pokeArrayAsync !t !n !ad
     stream <- asks ptxStream
     result <- liftPar $
       withLifetime stream $ \st  ->
-        withDevicePtr t ad $ \dst ->
-          nonblocking stream $ do
+        withDevicePtr t ad $ \dst -> do
+          (mevent, res) <- nonblocking stream $ do
             transfer "pokeArray" bytes (Just st) $ do
               CUDA.pokeArrayAsync n src dst (Just st)
               Debug.memcpy_to_remote bytes
             return ad
+          _ <- liftIO $ forkIO $ threadDelay 100000 >> touchUniqueArray ad
+          -- liftIO $ forM_ mevent $ \ev -> addFinalizer ev (touchUniqueArray ad)
+          return (mevent, res)
     --
     return result
 
@@ -183,12 +189,15 @@ peekArrayAsync !t !n !ad
     stream <- asks ptxStream
     result <- liftPar $
       withLifetime stream $ \st  ->
-        withDevicePtr t ad  $ \src ->
-          nonblocking stream $ do
+        withDevicePtr t ad  $ \src -> do
+          (mevent, res) <- nonblocking stream $ do
             transfer "peekArray" bytes (Just st) $ do
               CUDA.peekArrayAsync n src dst (Just st)
               Debug.memcpy_from_remote bytes
             return ad
+          _ <- liftIO $ forkIO $ threadDelay 100000 >> touchUniqueArray ad
+          -- liftIO $ forM_ mevent $ \ev -> addFinalizer ev (touchUniqueArray ad)
+          return (mevent, res)
     --
     return result
 
@@ -382,11 +391,17 @@ message :: MonadIO m => Format (m ()) a -> a
 message fmt = Debug.traceM Debug.dump_gc ("gc: " % fmt)
 
 {-# INLINE transfer #-}
-transfer :: MonadIO m => Builder -> Int -> Maybe CUDA.Stream -> IO () -> m ()
+transfer :: (MonadIO m, HasCallStack) => Builder -> Int -> Maybe CUDA.Stream -> IO () -> m ()
 transfer name bytes stream action =
-  let fmt wall cpu gpu =
-        message (builder % ": " % F.bytes @Double shortest % " @ " % Debug.formatSIBase (Just 3) 1024 % "B/s, " % Debug.elapsed)
-          name bytes (double bytes / wall) wall cpu gpu
+  let fmt _wall _cpu _gpu =
+        -- message (builder % ": " % F.bytes @Double shortest % " @ " % Debug.formatSIBase (Just 3) 1024 % "B/s, " % Debug.elapsed)
+        --   name bytes (double bytes / wall) wall cpu gpu
+        message (builder % ": " % F.bytes @Double shortest % " " % string)
+          name bytes (compactCallStack callStack)
   in
   liftIO (Debug.timed Debug.dump_gc fmt stream action)
+
+compactCallStack :: CallStack -> String
+compactCallStack stk = intercalate "; " (map (\(fn, loc) -> fn ++ " @ " ++ compactSrcLoc loc) (getCallStack stk))
+  where compactSrcLoc loc = srcLocPackage loc ++ ":" ++ srcLocFile loc ++ ":" ++ show (srcLocStartLine loc)
 

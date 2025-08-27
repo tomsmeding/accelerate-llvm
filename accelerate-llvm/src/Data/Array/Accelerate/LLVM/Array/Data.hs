@@ -45,6 +45,7 @@ import Data.Array.Accelerate.LLVM.Execute.Async
 
 import Control.Monad                                                ( liftM, liftM2 )
 import Prelude
+import GHC.Stack
 
 
 class Async arch => Remote arch where
@@ -59,7 +60,8 @@ class Async arch => Remote arch where
   --
   {-# INLINE useRemoteR #-}
   useRemoteR
-      :: SingleType e
+      :: HasCallStack
+      => SingleType e
       -> Int                      -- ^ number of elements to copy
       -> ArrayData e              -- ^ array payload
       -> Par arch (FutureR arch (ArrayData e))
@@ -105,7 +107,7 @@ class Async arch => Remote arch where
   -- of multiple memcpy engines.
   --
   {-# INLINE useRemoteAsync #-}
-  useRemoteAsync :: ArraysR arrs -> arrs -> Par arch (FutureArraysR arch arrs)
+  useRemoteAsync :: HasCallStack => ArraysR arrs -> arrs -> Par arch (FutureArraysR arch arrs)
   useRemoteAsync repr arrs =
     runArraysAsync repr arrs $ \(ArrayR shr tp) arr ->
       let n = size shr (shape arr)

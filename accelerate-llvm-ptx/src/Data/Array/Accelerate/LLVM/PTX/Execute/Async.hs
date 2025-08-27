@@ -23,6 +23,7 @@ module Data.Array.Accelerate.LLVM.PTX.Execute.Async (
 
 ) where
 
+import qualified Data.Array.Accelerate.Debug.Internal               as Debug
 import Data.Array.Accelerate.Error
 import Data.Array.Accelerate.Lifetime
 
@@ -126,11 +127,13 @@ instance Async PTX where
           ready <- Event.query event
           if ready
             then do
+              Debug.traceM Debug.dump_exec "get on ready Pending future"
               writeIORef ref (Full v)
               case k of
                 Just f  -> touchLifetime f
                 Nothing -> return ()
-            else
+            else do
+              Debug.traceM Debug.dump_exec "get on non-ready Pending future, after'ing"
               Event.after event stream
           return v
         Empty           -> internalError "blocked on an IVar"

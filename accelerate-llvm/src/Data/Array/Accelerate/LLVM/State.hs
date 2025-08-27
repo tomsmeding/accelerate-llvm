@@ -1,5 +1,6 @@
 {-# LANGUAGE CPP                        #-}
 {-# LANGUAGE GeneralizedNewtypeDeriving #-}
+{-# LANGUAGE RankNTypes                 #-}
 {-# OPTIONS_HADDOCK hide #-}
 -- |
 -- Module      : Data.Array.Accelerate.LLVM.State
@@ -21,10 +22,12 @@ import Data.Array.Accelerate.LLVM.Target.ClangInfo
 import qualified Data.Array.Accelerate.LLVM.Internal.LLVMPretty.PP as LP
 
 -- standard library
+import Control.Concurrent.MVar
 import Control.Monad.Catch                              ( MonadCatch, MonadThrow, MonadMask )
-import Control.Monad.Reader                             ( ReaderT, MonadReader, runReaderT )
-import Control.Monad.State                              ( StateT, MonadState, evalStateT )
+import Control.Monad.Reader                             ( ReaderT(..), MonadReader, runReaderT )
+import Control.Monad.State                              ( StateT(..), MonadState, evalStateT )
 import Control.Monad.Trans                              ( MonadIO )
+import Data.Maybe                                       ( fromJust )
 import Prelude
 
 
@@ -50,6 +53,37 @@ evalLLVM target acc =
   case llvmverFromTuple hostLLVMVersion of
     Just version -> evalStateT (runReaderT (runLLVM acc) version) target
     Nothing -> fail "accelerate-llvm: Could not determine LLVM version from Clang output"
+
+-- | Because 'LLVM' is a state monad, it cannot support running multiple
+-- computations in parallel (it would be unclear how to merge the resulting
+-- states of the parallel computations). Therefore, attempting to run the
+-- @forall a. LLVM t a -> IO a@ handler multiple times in parallel will not
+-- work as you like: it will __take a lock__ so that the invocations run
+-- sequentially. Furthermore, running the handler after the @IO b@ computation
+-- has returned will throw an asynchronous exception.
+unliftIOLLVM :: ((forall a. LLVM t a -> IO a) -> IO b) -> LLVM t b
+unliftIOLLVM f =
+  -- If the representation of the 'LLVM' monad changes, this function will have
+  -- to be revised anyway. Hence, using the monad constructors directly is
+  -- fine.
+  LLVM $
+    ReaderT $ \llvmver ->
+      StateT $ \instate -> do
+        var <- newMVar (Just instate)
+        res <- f (unlift llvmver var)
+        outstate <- takeMVar var
+        putMVar var Nothing  -- mark the handler as dead
+        return (res, fromJust outstate)
+  where
+    unlift :: LP.LLVMVer -> MVar (Maybe target) -> LLVM target a -> IO a
+    unlift llvmver var (LLVM (ReaderT g)) = do
+      let StateT h = g llvmver
+      modifyMVar var $ \mst ->
+        case mst of
+          Just st -> do
+            (x, st') <- h st
+            return (Just st', x)
+          Nothing -> error "unliftIOLLVM: Handler called after computation has completed"
 
 
 -- -- | Make sure the GC knows that we want to keep this thing alive forever.
