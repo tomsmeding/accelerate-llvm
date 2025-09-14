@@ -1,4 +1,5 @@
 {-# LANGUAGE ScopedTypeVariables #-}
+{-# LANGUAGE TemplateHaskell #-}
 -- |
 -- Module      : Data.Array.Accelerate.LLVM.PTX.Analysis.Device
 -- Copyright   : [2008..2020] The Accelerate Team
@@ -13,6 +14,7 @@ module Data.Array.Accelerate.LLVM.PTX.Analysis.Device
   where
 
 import Control.Exception
+import Data.Bifunctor                                               ( second )
 import Data.Function
 import Data.List
 import Data.Ord
@@ -54,17 +56,37 @@ selectBestDevice = select =<< enumerateDevices
 enumerateDevices :: IO [(Device, DeviceProperties)]
 enumerateDevices = do
   devs  <- mapM CUDA.device . enumFromTo 0 . subtract 1 =<< CUDA.count
-  prps  <- mapM CUDA.props devs
-  return $ sortBy (flip compareDevices `on` snd) (zip devs prps)
+  prps  <- mapM (\dev -> extendDeviceProperties dev =<< CUDA.props dev) devs
+  return $ map (second devProp'prop) $
+             sortBy (flip compareDevices `on` snd) (zip devs prps)
+
+
+-- | An extended 'CUDA.DeviceProperties' with some additional fields that must
+-- be obtained via cuDeviceGetAttribute instead of being available in
+-- cudaDeviceProps.
+data DeviceProperties' = DeviceProperties'
+  { devProp'prop      :: !DeviceProperties
+  , devProp'clockRate :: !Int }
+
+extendDeviceProperties :: Device -> DeviceProperties -> IO DeviceProperties'
+extendDeviceProperties dev prps = do
+  -- Before CUDA 13, the clock rate was included in cudaDeviceProps.
+  clock <- $(if CUDA.libraryVersion >= 13000
+               then [| CUDA.attribute dev CUDA.ClockRate |]
+               else [| return (clockRate prps) |])
+  return DeviceProperties'
+           { devProp'prop = prps
+           , devProp'clockRate = clock }
 
 
 -- Return a ordering of two device with respect to (estimated) performance
 --
-compareDevices :: DeviceProperties -> DeviceProperties -> Ordering
+compareDevices :: DeviceProperties' -> DeviceProperties' -> Ordering
 compareDevices = cmp
   where
-    compute     = computeCapability
-    flops d     = multiProcessorCount d * coresPerMultiProcessor d * clockRate d
+    compute (DeviceProperties' prop _    ) = computeCapability prop
+    flops   (DeviceProperties' prop clock) =
+      multiProcessorCount prop * coresPerMultiProcessor prop * clock
     cmp x y
       | compute x == compute y  = comparing flops   x y
       | otherwise               = comparing compute x y

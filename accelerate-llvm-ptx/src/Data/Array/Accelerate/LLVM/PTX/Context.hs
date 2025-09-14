@@ -115,7 +115,8 @@ raw dev prp ctx = do
   nm   <- go 0 str
 
   -- Display information about the selected device
-  Debug.traceM Debug.dump_phases builder (deviceInfo dev prp)
+  prp' <- extendDeviceProperties dev prp
+  Debug.traceM Debug.dump_phases builder (deviceInfo dev prp')
 
   return $! Context prp nm lft
 
@@ -150,8 +151,8 @@ pop = do
 --
 -- Device 0: GeForce 9600M GT (compute capability 1.1), 4 multiprocessors @ 1.25GHz (32 cores), 512MB global memory
 --
-deviceInfo :: CUDA.Device -> CUDA.DeviceProperties -> Builder
-deviceInfo dev prp = go $ layoutPretty defaultLayoutOptions $
+deviceInfo :: CUDA.Device -> DeviceProperties' -> Builder
+deviceInfo dev (DeviceProperties' prp clockRate') = go $ layoutPretty defaultLayoutOptions $
   devID <> colon <+> name <+> parens compute
         <> comma <+> processors <+> at <+> pretty clock <+> parens cores
         <> comma <+> memory
@@ -163,7 +164,7 @@ deviceInfo dev prp = go $ layoutPretty defaultLayoutOptions $
     cores       = pretty (CUDA.multiProcessorCount prp * coresPerMultiProcessor prp) <+> "cores"
     memory      = pretty mem <+> "global memory"
     ----
-    clock       = toLazyText $ Debug.showFFloatSIBase (Just 2) 1000 (fromIntegral $ CUDA.clockRate prp * 1000 :: Double) "Hz"
+    clock       = toLazyText $ Debug.showFFloatSIBase (Just 2) 1000 (fromIntegral $ clockRate' * 1000 :: Double) "Hz"
     mem         = toLazyText $ Debug.showFFloatSIBase (Just 0) 1024 (fromIntegral $ CUDA.totalGlobalMem prp   :: Double) "B"
     at          = pretty '@'
 
